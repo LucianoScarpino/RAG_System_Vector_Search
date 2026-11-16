@@ -46,7 +46,7 @@ def _ask_positive_int(prompt: str, default: int) -> int:
         print("Enter a positive integer.")
 
 
-def _collect_settings() -> tuple[Settings, Path, int | None, int]:
+def _collect_settings() -> tuple[Settings, Path, int | None, int, bool]:
     """Collect connection, model, document, and chunking settings interactively."""
 
     print("\n=== RAG system: setup ===")
@@ -55,10 +55,25 @@ def _collect_settings() -> tuple[Settings, Path, int | None, int]:
     print("Example full URI:")
     print("  mongodb+srv://username:password@cluster0.example.mongodb.net/")
     print("Do not enter credentials separated by slashes.")
+    print("Type 'load' to load MongoDB credentials from a JSON file.")
 
     while True:
         while True:
-            uri = _ask("MongoDB URI (leave blank for separate credentials)")
+            uri = _ask("MongoDB URI (or type 'load' for a JSON credentials file)")
+            if uri.lower() == "load":
+                credentials_path = Path(
+                    _ask(
+                        "Credentials JSON path",
+                        "config/mongodb_credentials.json",
+                    )
+                )
+                try:
+                    settings = Settings.from_credentials_file(credentials_path)
+                    print(f"Loaded MongoDB settings from {credentials_path}.")
+                    break
+                except (FileNotFoundError, ValueError) as exc:
+                    print(f"[ERROR] Could not load credentials JSON: {exc}")
+                    continue
             if not uri:
                 os.environ.pop("MONGODB_URI", None)
                 os.environ["MONGODB_USERNAME"] = _ask("MongoDB username (e.g. db_user)")
@@ -66,6 +81,7 @@ def _collect_settings() -> tuple[Settings, Path, int | None, int]:
                 os.environ["MONGODB_CLUSTER_HOST"] = _ask(
                     "MongoDB cluster host (e.g. cluster0.example.mongodb.net)"
                 )
+                settings = Settings.from_env()
                 break
             if uri.startswith(("mongodb://", "mongodb+srv://")):
                 if "<" in uri or ">" in uri:
@@ -76,13 +92,13 @@ def _collect_settings() -> tuple[Settings, Path, int | None, int]:
                     )
                     continue
                 os.environ["MONGODB_URI"] = uri
+                settings = Settings.from_env()
                 break
             print(
                 "Invalid MongoDB URI. It must start with 'mongodb://' or "
                 "'mongodb+srv://'. Please try again."
             )
 
-        settings = Settings.from_env()
         print("\nTesting MongoDB Atlas connection...", flush=True)
         try:
             client = HostConnection.connect(settings.mongodb_uri)
@@ -128,7 +144,11 @@ def _collect_settings() -> tuple[Settings, Path, int | None, int]:
     else:
         manual_chunk_size = None
     padding = _ask_positive_int("Overlap in sentence units", 1)
-    return settings, pdf_path, manual_chunk_size, padding
+    recreate_index = _ask(
+        "Recreate an incompatible vector index",
+        "no",
+    ).lower() in {"y", "yes"}
+    return settings, pdf_path, manual_chunk_size, padding, recreate_index
 
 
 def _index_for_session(
@@ -136,6 +156,7 @@ def _index_for_session(
     pdf_path: Path,
     manual_chunk_size: int | None,
     padding: int,
+    recreate_index: bool,
 ) -> tuple[VectorStore, object, object, int]:
     """Index the selected document and return the active store and models."""
 
@@ -147,6 +168,19 @@ def _index_for_session(
         settings.embedding_model,
         manual_chunk_size=manual_chunk_size,
     )
+
+    print("\nConnecting to MongoDB Atlas...", flush=True)
+    client = HostConnection.connect(settings.mongodb_uri)
+    store = VectorStore.from_client(client, settings.database, settings.collection)
+    dimensions = Embedding.embedding_dimension(model_config.model)
+    print("\nCreating or checking the MongoDB vector index...", flush=True)
+    index_action = store.create_vector_index(
+        settings.vector_index,
+        dimensions,
+        recreate=recreate_index,
+    )
+    print(f"Vector index action: {index_action}.", flush=True)
+
     print("\nReading the PDF and creating chunks...", flush=True)
     ingestion = DataIngestion()
     chapters = ingestion.read_with_outline(pdf_path)
@@ -174,9 +208,6 @@ def _index_for_session(
     for chunk_id, chunk in enumerate(chunks):
         chunk["chunk_id"] = chunk_id
 
-    print("\nConnecting to MongoDB Atlas...", flush=True)
-    client = HostConnection.connect(settings.mongodb_uri)
-    store = VectorStore.from_client(client, settings.database, settings.collection)
     store.insert_chunks(chunks, replace_document_id=document_id)
 
     print("\nGenerating and validating embeddings...", flush=True)
@@ -187,9 +218,6 @@ def _index_for_session(
         None,
         store.collection,
     )
-    dimensions = embedding.embedding_dimension(model_config.model)
-    print("\nCreating or checking the MongoDB vector index...", flush=True)
-    store.create_vector_index(settings.vector_index, dimensions)
     print(
         f"Indexed {len(chunks)} chunks and updated {embedded} embeddings "
         f"({dimensions} dimensions; {model_config.chunk_size}-token limit)."
@@ -227,9 +255,12 @@ def _run_preflight(
         settings.embedding_model,
         vector_index=settings.vector_index,
     )
-    search_results = retriever.vector_search("What is the document about?", k=1)
-    if not search_results:
-        raise RuntimeError("Vector search returned no results")
+    print("Waiting for Atlas to index the new vectors...", flush=True)
+    search_results = store.wait_for_vector_results(
+        retriever.embed_query("What is the document about?"),
+        k=1,
+        index_name=settings.vector_index,
+    )
     print(f"[OK] Vector search: retrieved chunk {search_results[0]['chunk_id']}")
     preflight_results.append({"check": "Vector search", "status": "PASS"})
 
@@ -250,12 +281,13 @@ def run_interactive() -> None:
     """Run the complete setup, preflight, and interactive query workflow."""
 
     try:
-        settings, pdf_path, manual_chunk_size, padding = _collect_settings()
+        settings, pdf_path, manual_chunk_size, padding, recreate_index = _collect_settings()
         store, embedding_model, _tokenizer, dimensions = _index_for_session(
             settings,
             pdf_path,
             manual_chunk_size,
             padding,
+            recreate_index,
         )
         generator = TextGenerator(settings.llm_model)
         preflight_results = _run_preflight(

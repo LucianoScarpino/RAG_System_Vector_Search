@@ -114,33 +114,115 @@ class VectorStore:
         embeddings_path: str = "embedding",
         filter_paths: tuple[str, ...] = ("chapter", "document_id"),
         timeout_seconds: int = 300,
-    ) -> None:
-        """Create and wait for a MongoDB Atlas vector-search index."""
+        recreate: bool = False,
+    ) -> str:
+        """Create, reuse, or explicitly recreate a reproducible vector index."""
 
-        fields = [
-            {
-                "type": "vector",
-                "path": embeddings_path,
-                "numDimensions": embedding_dims,
-                "similarity": "cosine",
-            }
-        ]
-        fields.extend({"type": "filter", "path": path} for path in filter_paths)
+        expected_definition = {
+            "fields": [
+                {
+                    "type": "vector",
+                    "path": embeddings_path,
+                    "numDimensions": embedding_dims,
+                    "similarity": "cosine",
+                },
+                *({"type": "filter", "path": path} for path in filter_paths),
+            ]
+        }
+        existing_indexes = list(self.collection.list_search_indexes(index_name))
+        existing = next(
+            (index for index in existing_indexes if index.get("name") == index_name),
+            None,
+        )
+
+        if existing is not None and self._index_matches(existing, expected_definition):
+            self._wait_for_index(index_name, timeout_seconds)
+            return "reused"
+
+        if existing is not None and not recreate:
+            raise RuntimeError(
+                f"Vector index '{index_name}' exists but is incompatible with the "
+                "current embedding configuration. Re-run with the explicit "
+                "recreate-index option to replace it."
+            )
+
+        if existing is not None:
+            self.collection.drop_search_index(index_name)
+            deadline = time.monotonic() + timeout_seconds
+            while time.monotonic() < deadline:
+                if not list(self.collection.list_search_indexes(index_name)):
+                    break
+                time.sleep(2)
+            else:
+                raise TimeoutError(
+                    f"Existing vector index '{index_name}' was not removed in time"
+                )
+
         model = SearchIndexModel(
-            definition={"fields": fields},
+            definition=expected_definition,
             name=index_name,
             type="vectorSearch",
         )
+        self.collection.create_search_index(model=model)
+        self._wait_for_index(index_name, timeout_seconds)
+        return "recreated" if existing is not None else "created"
 
-        if not list(self.collection.list_search_indexes(index_name)):
-            self.collection.create_search_index(model=model)
+    @staticmethod
+    def _index_matches(index: dict, expected_definition: dict) -> bool:
+        """Compare the relevant vector-index definition fields."""
+
+        actual_definition = index.get("latestDefinition") or index.get("definition")
+        if not actual_definition:
+            return False
+
+        def normalize(fields: list[dict]) -> list[tuple]:
+            """Normalize index fields so ordering does not affect comparison."""
+
+            return sorted(
+                (
+                    field.get("type"),
+                    field.get("path"),
+                    field.get("numDimensions"),
+                    field.get("similarity"),
+                )
+                for field in fields
+            )
+
+        return normalize(actual_definition.get("fields", [])) == normalize(
+            expected_definition.get("fields", [])
+        )
+
+    def _wait_for_index(self, index_name: str, timeout_seconds: int) -> None:
+        """Wait until an Atlas vector index reports that it is queryable."""
 
         deadline = time.monotonic() + timeout_seconds
         while time.monotonic() < deadline:
-            if any(index.get("queryable") for index in self.collection.list_search_indexes(index_name)):
+            indexes = list(self.collection.list_search_indexes(index_name))
+            if any(index.get("queryable") for index in indexes):
                 return
             time.sleep(5)
         raise TimeoutError(f"Vector index '{index_name}' did not become queryable in time")
+
+    def wait_for_vector_results(
+        self,
+        query_embedding: list[float],
+        k: int = 1,
+        timeout_seconds: int = 120,
+        poll_seconds: int = 5,
+        **search_kwargs: Any,
+    ) -> list[dict]:
+        """Wait for Atlas to return results after newly embedded documents are written."""
+
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            results = self.vector_search(query_embedding, k=k, **search_kwargs)
+            if results:
+                return results
+            time.sleep(poll_seconds)
+        raise TimeoutError(
+            "The vector index is queryable but has not returned results for the "
+            "newly indexed documents within the timeout."
+        )
 
     def vector_search(
         self,

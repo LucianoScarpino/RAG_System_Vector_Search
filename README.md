@@ -31,6 +31,34 @@ flowchart LR
 
 The embedding model controls the input budget used by chunking. The generation model is independent and can be changed without re-indexing, while changing the embedding model requires re-indexing the documents.
 
+## Intended use: internal knowledge retrieval
+
+This project is designed to support internal knowledge activities by making
+information contained in company documents easier to find and use. Typical
+source material includes:
+
+- technical manuals and product specifications;
+- written routines, standard operating procedures, and work instructions;
+- troubleshooting guides and internal technical documentation;
+- policies, onboarding material, and operational references.
+
+Employees can ask a question in natural language and retrieve relevant parts
+of the indexed documents, together with source chunks that support the answer.
+For example, the system can help locate a specific technical requirement in a
+manual, identify the steps of a written routine, or find an internal rule
+needed to complete an operational task.
+
+The repository currently provides a modular Python reference implementation
+with PDF ingestion, MongoDB Atlas Vector Search, Hugging Face models, a CLI,
+and an interactive query loop. It should be treated as a foundation for an
+internal knowledge assistant: a production deployment would additionally need
+authentication, document-level permissions, audit logging, document lifecycle
+management, and systematic evaluation of retrieval and answer quality.
+
+Answers should be checked against the cited source material. Document curation
+is also important because PDFs may contain appendices, legal notices, or other
+boilerplate that can be retrieved for broad questions.
+
 ## Requirements
 
 - Python 3.10 or newer.
@@ -38,6 +66,31 @@ The embedding model controls the input budget used by chunking. The generation m
 - Network access from the runtime to the Atlas cluster.
 - Hugging Face model access. Public models do not normally require a token.
 - Enough local memory for the selected embedding and generation models.
+
+## MongoDB Atlas setup
+
+Before starting the application, create a MongoDB Atlas deployment. MongoDB
+Atlas is the remote database service used by this project; a local MongoDB
+installation is not required.
+
+Complete these steps in the Atlas console:
+
+1. Create an Atlas account and a project.
+2. Create a cluster. The free M0 tier is sufficient for development and
+   testing.
+3. Create a database user under **Security > Database Access**. Use this
+   username and password in the MongoDB connection URI.
+4. Add the IP address of the machine running the application under
+   **Security > Network Access**. Avoid allowing access from every IP unless
+   that is intentional and properly secured.
+5. In **Browse Collections**, create the database `rag_system` and the
+   collection `document_chunks`, or use different names and provide them when
+   the application asks for the database and collection settings.
+
+The application creates the MongoDB Atlas vector-search index when it does not
+exist and reuses an existing index with the configured name. The vector index
+is separate from the database and collection: it is used to search the stored
+embedding vectors efficiently.
 
 ## Installation
 
@@ -75,21 +128,38 @@ export MONGODB_PASSWORD="<password>"
 export MONGODB_CLUSTER_HOST="<cluster-host>"
 ```
 
+### Load MongoDB credentials from JSON
+
+You can store the MongoDB connection settings in a local JSON file. Start the
+interactive application and type `load` when it asks for the MongoDB URI:
+
+```text
+MongoDB URI (or type 'load' for a JSON credentials file): load
+Credentials JSON path (press Enter to use 'config/mongodb_credentials.json'):
+```
+
+Use [config/mongodb_credentials.example.json](</Users/lilshoe/Library/Mobile Documents/com~apple~CloudDocs/Documents/Projects/RAG_System/config/mongodb_credentials.example.json>) as a template. The JSON file may contain either a complete `mongodb_uri` or the separate fields `username`, `password`, and `cluster_host`. The database, collection, and vector-index names are optional and default to `rag_system`, `document_chunks`, and `vector_index`.
+
+Copy the example file to `config/mongodb_credentials.json`, replace the
+placeholder values, and never commit the real credentials file. It is excluded
+by `.gitignore`.
+
 Never commit `.env`, credentials, access tokens, or private documents.
 
 ## Interactive workflow
 
 The interactive mode performs the following sequence:
 
-1. Requests a MongoDB URI or separate username, password, and cluster host.
+1. Requests a MongoDB URI, separate credentials, or `load` for a JSON credentials file.
 2. Tests the MongoDB Atlas connection immediately.
 3. Requests database, collection, vector-index, embedding-model, and LLM settings.
 4. Requests the PDF path and chunking options.
-5. Loads the embedding model and derives its tokenizer limit.
-6. Indexes the PDF, generates validated embeddings, and creates the vector index.
-7. Runs preflight checks.
-8. Optionally displays database statistics, plots, and preflight results.
-9. Starts the query loop.
+5. Asks whether an incompatible existing vector index may be recreated.
+6. Loads the embedding model and derives its tokenizer limit.
+7. Indexes the PDF, generates validated embeddings, and creates or reuses the vector index.
+8. Runs preflight checks and waits for Atlas to return real vector results.
+9. Optionally displays database statistics, plots, and preflight results.
+10. Starts the query loop.
 
 Prompts with a default explicitly say `press Enter to use '<value>'`. An empty manual chunk-size input selects the model-derived token limit.
 
@@ -117,7 +187,7 @@ After the preflight checks, the application asks:
 Display database plots and preflight test results before queries? (press Enter to use 'y'):
 ```
 
-The default display includes a chunk table, descriptive statistics, a preflight-status table, and plots for token count, sentence count, character count, word count, tokens versus sentences, and test status. Close the plot window to continue to the query loop.
+The default display includes a chunk table, descriptive statistics, a preflight-status table, and plots for token count, sentence count, character count, word count, and tokens versus sentences. The plot is automatically saved as `reports/database_diagnostics.png`. Close the plot window to continue to the query loop.
 
 Type `exit`, `quit`, or `q` in the query prompt to stop the application.
 
@@ -145,6 +215,14 @@ python RAG_System.py index \
 ```
 
 If the manual value differs from the model limit, the command asks for confirmation. Add `--yes` only when that override is intentional.
+
+If an index with the selected name already exists, its definition is compared with the current embedding path, dimension, similarity, and filter fields. A compatible index is reused. An incompatible index stops the command unless you explicitly pass:
+
+```bash
+--recreate-index
+```
+
+This makes index reuse deterministic and prevents an old index configuration from being silently applied to a new embedding model.
 
 ### Ask a question
 

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from urllib.parse import quote_plus
 
 import certifi
@@ -52,6 +54,58 @@ class Settings:
                 "EMBEDDING_MODEL", "sentence-transformers/all-mpnet-base-v2"
             ),
             llm_model=os.getenv("LLM_MODEL", "Qwen/Qwen2.5-1.5B-Instruct"),
+        )
+
+    @classmethod
+    def from_credentials_file(cls, path: str | Path) -> "Settings":
+        """Load MongoDB credentials and optional database settings from JSON."""
+
+        credentials_path = Path(path)
+        try:
+            payload = json.loads(credentials_path.read_text(encoding="utf-8"))
+        except FileNotFoundError as exc:
+            raise FileNotFoundError(
+                f"Credentials JSON file not found: {credentials_path}"
+            ) from exc
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Credentials JSON file is not valid JSON: {credentials_path}"
+            ) from exc
+
+        if not isinstance(payload, dict):
+            raise ValueError("Credentials JSON must contain one JSON object")
+
+        uri = payload.get("mongodb_uri", payload.get("uri"))
+        if uri is None:
+            username = payload.get("username", payload.get("mongodb_username"))
+            password = payload.get("password", payload.get("mongodb_password"))
+            cluster_host = payload.get(
+                "cluster_host",
+                payload.get("mongodb_cluster_host"),
+            )
+            if not all(isinstance(value, str) and value for value in (username, password, cluster_host)):
+                raise ValueError(
+                    "Credentials JSON must contain mongodb_uri or username, "
+                    "password, and cluster_host"
+                )
+            uri = (
+                f"mongodb+srv://{quote_plus(username)}:{quote_plus(password)}"
+                f"@{cluster_host}/"
+            )
+
+        if not isinstance(uri, str) or not uri.startswith(("mongodb://", "mongodb+srv://")):
+            raise ValueError(
+                "The JSON MongoDB URI must start with 'mongodb://' or "
+                "'mongodb+srv://'"
+            )
+        if "<" in uri or ">" in uri:
+            raise ValueError("The JSON credentials still contain a placeholder value")
+
+        return cls(
+            mongodb_uri=uri,
+            database=payload.get("database", "rag_system"),
+            collection=payload.get("collection", "document_chunks"),
+            vector_index=payload.get("vector_index", "vector_index"),
         )
 
 

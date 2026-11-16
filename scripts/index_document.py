@@ -38,6 +38,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Delete existing chunks for this document id before indexing",
     )
     parser.add_argument(
+        "--recreate-index",
+        action="store_true",
+        help="Recreate an existing vector index when its definition is incompatible",
+    )
+    parser.add_argument(
         "--yes",
         action="store_true",
         help="Accept a manual/model chunk-size mismatch automatically",
@@ -106,6 +111,12 @@ def index_document(args: argparse.Namespace) -> dict[str, int | str]:
 
     client = HostConnection.connect(settings.mongodb_uri)
     store = VectorStore.from_client(client, settings.database, settings.collection)
+    dimensions = Embedding.embedding_dimension(model_config.model)
+    index_action = store.create_vector_index(
+        settings.vector_index,
+        embedding_dims=dimensions,
+        recreate=args.recreate_index,
+    )
     inserted = store.insert_chunks(
         chunks,
         replace_document_id=document_id if args.replace else None,
@@ -119,12 +130,12 @@ def index_document(args: argparse.Namespace) -> dict[str, int | str]:
         store.collection,
         bulk_size=args.bulk_size,
     )
-    dimensions = embedding.embedding_dimension(model_config.model)
-    store.create_vector_index(
-        settings.vector_index,
-        embedding_dims=dimensions,
+    print("Waiting for Atlas to index the new vectors...", flush=True)
+    store.wait_for_vector_results(
+        Embedding.encode_query(model_config.model, "What is the document about?"),
+        k=1,
+        index_name=settings.vector_index,
     )
-
     result = {
         "document_id": document_id,
         "chapters": len(chapters),
@@ -132,6 +143,7 @@ def index_document(args: argparse.Namespace) -> dict[str, int | str]:
         "embedded": embedded,
         "max_model_tokens": model_config.model_max_tokens,
         "chunk_size": model_config.chunk_size,
+        "vector_index_action": index_action,
     }
     print(result)
     return result
