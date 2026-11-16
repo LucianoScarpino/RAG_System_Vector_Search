@@ -1,0 +1,32 @@
+# Secrets and local configuration
+.env
+*.env
+!.env.example
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments and local tooling
+.venv/
+venv/
+*.egg-info/
+
+# Model and application caches
+.cache/
+models/
+checkpoints/
+
+# Local documents and generated data
+data/*.pdf
+data/*.docx
+data/*.txt
+data/*.json
+!data/.gitkeep
+
+# Notebook and editor artifacts
+.ipynb_checkpoints/
+.DS_Store
