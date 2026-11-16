@@ -344,7 +344,3 @@ Check the model id on Hugging Face, install the required dependencies, and verif
 ### Results are irrelevant
 
 Inspect the retrieved chunks and scores first. Then verify that the same embedding model was used for indexing and querying, and evaluate chunk size, overlap, and the retrieval `top_k` value.
-
-## License
-
-Add the project license before publishing a public release.
