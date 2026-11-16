@@ -189,6 +189,10 @@ Display database plots and preflight test results before queries? (press Enter t
 
 The default display includes a chunk table, descriptive statistics, a preflight-status table, and plots for token count, sentence count, character count, word count, and tokens versus sentences. The plot is automatically saved as `reports/database_diagnostics.png`. Close the plot window to continue to the query loop.
 
+### Diagnostic plot preview
+
+![Database diagnostics](reports/database_diagnostics.png)
+
 Type `exit`, `quit`, or `q` in the query prompt to stop the application.
 
 ## Command-line usage
