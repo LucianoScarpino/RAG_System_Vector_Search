@@ -340,7 +340,3 @@ The query loop can still continue when the optional diagnostics libraries are un
 ### The model cannot be loaded
 
 Check the model id on Hugging Face, install the required dependencies, and verify local memory. Private or gated models may require `HF_TOKEN`.
-
-### Results are irrelevant
-
-Inspect the retrieved chunks and scores first. Then verify that the same embedding model was used for indexing and querying, and evaluate chunk size, overlap, and the retrieval `top_k` value.
