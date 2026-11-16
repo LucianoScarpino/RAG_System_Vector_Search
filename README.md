@@ -138,7 +138,7 @@ MongoDB URI (or type 'load' for a JSON credentials file): load
 Credentials JSON path (press Enter to use 'config/mongodb_credentials.json'):
 ```
 
-Use [config/mongodb_credentials.example.json](</Users/lilshoe/Library/Mobile Documents/com~apple~CloudDocs/Documents/Projects/RAG_System/config/mongodb_credentials.example.json>) as a template. The JSON file may contain either a complete `mongodb_uri` or the separate fields `username`, `password`, and `cluster_host`. The database, collection, and vector-index names are optional and default to `rag_system`, `document_chunks`, and `vector_index`.
+Use [config/mongodb_credentials.example.json](config/mongodb_credentials.example.json) as a template. The JSON file may contain either a complete `mongodb_uri` or the separate fields `username`, `password`, and `cluster_host`. The database, collection, and vector-index names are optional and default to `rag_system`, `document_chunks`, and `vector_index`.
 
 Copy the example file to `config/mongodb_credentials.json`, replace the
 placeholder values, and never commit the real credentials file. It is excluded
